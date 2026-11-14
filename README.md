@@ -59,12 +59,33 @@ docker compose down -v --remove-orphans
 
 ### 算法 A｜实体解析（`backend/src/services/entity_resolution.py`）
 
+- **规则档案可插拔**（`backend/src/services/rule_profiles.py`）：
+  - `v1_threshold`（默认，升级前口径）：综合相似度达到单一阈值即连边；
+  - `v2_composite`（多规则复合门控）：综合分门槛（同中介 0.82 / 跨中介 0.80）+ 面积分硬门槛（≥0.83）
+    + 跨中介成对价格偏离门控（≤18%），拒绝原因（score/area/price）逐边留痕；
 - **blocking**：同 `community_norm` + 同 `layout_norm` + 面积桶（5㎡ 一档，取同桶与相邻桶）且 `|Δ面积| ≤ 5㎡`；
 - **相似度**：`0.35*area_close + 0.25*price_close + 0.20*floor_match + 0.10*orientation + 0.10*title_token`
   - `area_close = 1 − |Δa|/6`，`price_close = 1 − |Δp|/均值/0.30`（30% 价差处归零，跨中介报价天然差 1-3%），
     `floor_match` 同层 1.0 / 同区间 0.6，`orientation` 归一后相等 1.0，`title_token` = 标题字符二元组 Jaccard；
-- **阈值 0.80 连边**，并查集 + 传递闭包；簇置信 = 簇内最大成对分（`max_pair_score`）；
+- **并查集 + 传递闭包**；簇置信 = 簇内最大成对分（`max_pair_score`）；
 - **golden record**：价格取簇内中位、面积取众数（并列取小）、中介数去重计数、价差 = p90 − p10。
+
+### 规则切换：整批回填、断点续跑与导出闸门（`backend/src/services/cutover_service.py`）
+
+从 v1 单一阈值升级到 v2 复合门控时，按下列约束执行（API：`POST /api/cutover/run`、`GET /api/cutover`）：
+
+1. **整批回填**：对最近 `CUTOVER_BACKFILL_DAYS`（默认 30 天）入库的挂牌，在**全量集合上做一次实体解析**
+   （跨批次的同一套房必须聚成同一簇），结果以 `properties.publish_state='staging'` 落库，与已发布 v1 物理隔离；
+2. **断点续跑**：按 `CUTOVER_BATCH_SIZE`（默认 100 条）切持久化批次，每批一个 SAVEPOINT 与一行
+   `cutover_checkpoints`（含 phase/attempts/成员指纹）。单批失败只回滚该批，任务置 `failed` 且旧版继续生效；
+   重试跳过 `done` 批次，从失败断点继续，按成员指纹 upsert，**不重复生成房源簇或复核单**；
+3. **复核结论沿用/作废**：以成员挂牌自然键排序哈希作为 `member_fingerprint`。
+   成员集合**完全相同**才沿用旧结论（保留复核人/状态/备注，`recheck_of_id` 留痕）；
+   原簇被拆散（`cluster_split`）或成员变化（`members_changed`）时旧单置 `invalidated` 并作废，新风险簇重新排队；
+4. **导出闸门**：切换完成前，三种 CSV 只导出 `publish_state='active'` 的上一版（v1）数据，staging 半成品绝不进入导出；
+   失败时保留旧版。完成并对账通过后才原子激活（staging→active，旧 v1→archived 不删除）；
+5. **三方对账**：完成后校验 `簇数`、`成员数之和（=回填挂牌数）`、`导出行数（=簇数）` 相互对上，
+   且成员指纹无重复；不一致则中止切换、保持旧版。任务读数落在 `cutover_jobs.reconciliation`。
 
 ### 算法 B｜僵尸与钓鱼挂牌识别（`backend/src/services/risk_rules.py`）
 
@@ -128,6 +149,8 @@ SEED_SUMMARY brand=listingmerge users=3 sources=9 runs=2 findings=386 pending=6
 
 ```
 backend/src/{config,constants,controllers,middlewares,models,routes,schemas,services,utils}
+backend/src/services/{rule_profiles,cutover_service}.py   # v1/v2 规则档案 + 整批回填/断点/对账
+backend/src/models/cutover.py                             # cutover_jobs / cutover_checkpoints
 backend/scripts/{seed_demo.py,demo_config.py,worker_healthcheck.sh}
 backend/migrations/001_core_tables.sql   # DDL 参考（运行时由 create_all 建表）
 frontend/site/{index.html,css/{tokens,app}.css,js/{config,api,store,ui,app}.js,js/pages/*.js}

@@ -68,6 +68,23 @@ export const overviewPage = {
       return;
     }
     const latest = data.latest_run;
+    const cutover = data.cutover;
+    const cutoverTone = { completed: 'ok', running: 'warn', failed: 'danger', rolled_back: 'danger' }[cutover?.status] || '';
+    const cutoverBanner = cutover
+      ? `<section class="panel" style="border-left:4px solid var(--accent,#2f6fed)">
+          <div class="panel-body" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+            <div>
+              <b>归并规则切换：${esc(ENUMS.cutoverStatus[cutover.status] || cutover.status)}</b>
+              <span class="muted" style="margin-left:8px">${esc(ENUMS.ruleProfile[cutover.from_version] || cutover.from_version)} → ${esc(ENUMS.ruleProfile[cutover.to_version] || cutover.to_version)}
+                · 断点 ${esc(cutover.done_batches)}/${esc(cutover.total_batches)} 批</span>
+              ${cutover.status !== 'completed'
+                ? '<p class="note" style="margin:6px 0 0">切换完成前银行估价清单仍使用上一版，半成品不进入导出。</p>'
+                : '<p class="note" style="margin:6px 0 0">切换完成，导出已使用新版规则，旧簇归档可追溯。</p>'}
+            </div>
+            <span class="badge ${cutoverTone}">${esc(ENUMS.cutoverStatus[cutover.status] || cutover.status)}</span>
+          </div>
+        </section>`
+      : '';
     view.innerHTML = `
       <section class="hero">
         <div class="hero-top">
@@ -78,14 +95,16 @@ export const overviewPage = {
           <div class="hero-note">
             <p style="margin:0 0 6px">${
               latest
-                ? `最近一次重算 <span class="mono">${esc(latest.run_no)}</span>（阈值 ${esc(latest.threshold)}）：簇内价格中位 <b>${esc(wan(data.unit_price_median))}/㎡</b> 级别的口径已刷新，${esc(latest.multi_count)} 个多成员簇合并了重复挂牌。`
+                ? `最近一次重算 <span class="mono">${esc(latest.run_no)}</span>（规则 ${esc(ENUMS.ruleProfile[latest.rule_version] || latest.rule_version || 'v1')}）：簇内价格中位 <b>${esc(wan(data.unit_price_median))}/㎡</b> 级别的口径已刷新，${esc(latest.multi_count)} 个多成员簇合并了重复挂牌。`
                 : '还没有归并记录，去「归并簇」发起一次全量重算。'
             }</p>
-            <p class="note">算法 A 连边阈值 0.80；算法 B 用 (p90−p10)/中位 判价格离散，低于中位 10% 记钓鱼价、挂牌超 180 天且 0 带看记僵尸挂牌。</p>
+            <p class="note">算法 A：v1 单一相似度阈值 0.80，可升级为 v2 复合门控（面积硬门槛 + 跨中介价格门控）；算法 B 用 (p90−p10)/中位 判价格离散，低于中位 10% 记钓鱼价、挂牌超 180 天且 0 带看记僵尸挂牌。</p>
           </div>
         </div>
         ${heroTags(data)}
       </section>
+
+      ${cutoverBanner}
 
       <div class="grid-2">
         <section class="panel">

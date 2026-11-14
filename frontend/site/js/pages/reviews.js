@@ -18,10 +18,16 @@ function openReview(view, ctx, item) {
       ['风险等级', badge(riskTone(item.severity), item.severity_label)],
       ['风险标签', (prop.risk_tags || []).map((tag) => `<span class="badge ${tagTone(tag)}">${esc(ENUMS.riskTag[tag] || tag)}</span>`).join(' ') || '—'],
       ['复核状态', badge(reviewTone(item.status), item.status_label)],
+      ['规则版本', esc(ENUMS.ruleProfile[item.rule_version] || item.rule_version || '—')],
       ['复核人', esc(item.reviewer || '—')],
       ['结论备注', esc(item.note || '—')],
       ['创建时间', fmtTime(item.created_at)],
     ])}
+    ${item.invalidated_at
+      ? `<p class="note" style="color:var(--danger,#c0392b)">该结论已于 ${fmtTime(item.invalidated_at)} 作废（${esc(item.invalid_reason === 'cluster_split' ? '原簇被拆散' : '簇成员变更')}），新簇已重新排队复核。</p>`
+      : item.recheck_of_id
+        ? '<p class="note">本单沿用上一版同成员簇的复核结论（成员未变）。</p>'
+        : ''}
     <p class="note">确认后该簇的风险标签进入归档结论；驳回表示算法判断不成立，会留痕但不改簇内数据。</p>`,
     footer: editable
       ? `<form id="review-form" style="display:grid;gap:10px">
@@ -118,6 +124,7 @@ export const reviewsPage = {
             { key: 'reason_label', label: '原因' },
             { key: 'property', label: '价差', className: 'num', render: (row) => esc(wan((row.property || {}).spread)) },
             { key: 'status', label: '状态', render: (row) => badge(reviewTone(row.status), row.status_label) },
+            { key: 'rule_version', label: '规则版本', render: (row) => esc(ENUMS.ruleProfile[row.rule_version] || row.rule_version || '—') },
             { key: 'reviewer', label: '复核人', render: (row) => esc(row.reviewer || '—') },
           ],
           empty: { title: '这个筛选下没有复核单', hint: '换成「全部」看看，或先跑一次归并。' },

@@ -18,6 +18,19 @@ WEIGHT_ORIENTATION = 0.10
 WEIGHT_TITLE = 0.10
 FLOOR_BAND_MATCH = 0.60
 
+# ---- 算法 A v2｜多规则复合门控（替代单一相似度阈值）----
+# 连边需同时满足：综合分达到总分门槛、面积分达到硬门槛、且通过跨中介价格合理性门控。
+RULE_PROFILE_V1 = "v1_threshold"
+RULE_PROFILE_V2 = "v2_composite"
+V2_SCORE_THRESHOLD = 0.82
+V2_AREA_SCORE_MIN = 0.83            # 面积分硬门槛：|Δ面积| ≤ ~1.0㎡
+V2_PRICE_DEVIATION_LIMIT = 0.18     # 跨中介成对价格偏离上限（18%）
+V2_CROSS_AGENCY_SCORE_MIN = 0.80    # 跨中介候选对的综合分下限（高于同中介 0.82 不生效，仅作显式门控）
+V2_SAME_AGENCY_SCORE_MIN = V2_SCORE_THRESHOLD
+CUTOVER_BACKFILL_DAYS = 30          # 最近一个月房源整批回填窗口
+CUTOVER_BATCH_SIZE = 100            # 断点续跑的单批挂牌数
+CUTOVER_EXPORT_VERSION = RULE_PROFILE_V1  # 切换完成前银行估价清单使用的版本
+
 # ---- 算法 B｜僵尸与钓鱼挂牌识别 ----
 BAIT_DEVIATION = 0.10
 STALE_DAYS = 180

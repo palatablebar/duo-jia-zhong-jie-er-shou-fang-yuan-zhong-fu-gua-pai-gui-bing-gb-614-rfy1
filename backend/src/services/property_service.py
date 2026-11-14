@@ -40,6 +40,8 @@ def serialize(prop: Property, agency_names: list[str] | None = None) -> dict:
         "risk_tag_labels": [RISK_TAG_LABELS.get(tag, tag) for tag in (prop.risk_tags or [])],
         "risk_detail": prop.risk_detail or {},
         "agency_names": agency_names or [],
+        "rule_version": prop.rule_version,
+        "publish_state": prop.publish_state,
         "run_id": prop.run_id,
         "updated_at": iso_utc(prop.updated_at),
     }
@@ -72,8 +74,8 @@ def list_properties(
     limit: int = 20,
     offset: int = 0,
 ) -> dict:
-    stmt = select(Property)
-    count_stmt = select(func.count()).select_from(Property)
+    stmt = select(Property).where(Property.publish_state == "active")
+    count_stmt = select(func.count()).select_from(Property).where(Property.publish_state == "active")
     conditions = []
     if q:
         like = f"%{q.strip()}%"

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from src.config.settings import settings
 from src.constants.enums import (
+    CUTOVER_STATUS_LABELS,
     RISK_LEVEL_LABELS,
     RISK_LEVEL_ORDER,
     RISK_TAG_LABELS,
@@ -48,21 +49,43 @@ def _unit_price_median(properties: list[Property]) -> int:
 
 def overview(db: Session) -> dict:
     listing_total = db.scalar(select(func.count()).select_from(Listing)) or 0
-    cluster_total = db.scalar(select(func.count()).select_from(Property)) or 0
-    multi_total = db.scalar(select(func.count()).select_from(Property).where(Property.member_count > 1)) or 0
+    cluster_total = (
+        db.scalar(select(func.count()).select_from(Property).where(Property.publish_state == "active")) or 0
+    )
+    multi_total = (
+        db.scalar(
+            select(func.count())
+            .select_from(Property)
+            .where(Property.publish_state == "active", Property.member_count > 1)
+        )
+        or 0
+    )
     risk_total = (
         db.scalar(
             select(func.count())
             .select_from(Property)
-            .where(Property.risk_level.in_(["high", "medium"]))
+            .where(Property.publish_state == "active", Property.risk_level.in_(["high", "medium"]))
         )
         or 0
     )
     agency_total = db.scalar(select(func.count()).select_from(Agency)) or 0
-    pending_total = db.scalar(select(func.count()).select_from(Review).where(Review.status == "pending")) or 0
-    properties = list(db.scalars(select(Property)).all())
+    pending_total = (
+        db.scalar(
+            select(func.count())
+            .select_from(Review)
+            .where(Review.status == "pending", Review.invalidated_at.is_(None))
+        )
+        or 0
+    )
+    properties = list(db.scalars(select(Property).where(Property.publish_state == "active")).all())
 
-    level_rows = db.execute(select(Property.risk_level, func.count()).group_by(Property.risk_level)).all()
+    level_rows = (
+        db.execute(
+            select(Property.risk_level, func.count())
+            .where(Property.publish_state == "active")
+            .group_by(Property.risk_level)
+        ).all()
+    )
     level_counts = {key: count for key, count in level_rows}
     tag_counter: Counter[str] = Counter()
     for prop in properties:
@@ -77,6 +100,23 @@ def overview(db: Session) -> dict:
     ).all()
 
     latest_run = db.scalar(select(MatchRun).order_by(MatchRun.id.desc()).limit(1))
+    from src.models.cutover import CutoverJob
+
+    cutover = db.scalar(select(CutoverJob).order_by(CutoverJob.id.desc()).limit(1))
+    cutover_payload = (
+        {
+            "job_key": cutover.job_key,
+            "status": cutover.status,
+            "status_label": CUTOVER_STATUS_LABELS.get(cutover.status, cutover.status),
+            "from_version": cutover.from_version,
+            "to_version": cutover.to_version,
+            "done_batches": cutover.done_batches,
+            "total_batches": cutover.total_batches,
+            "finished_at": cutover.finished_at.isoformat(timespec="seconds") + "Z" if cutover.finished_at else None,
+        }
+        if cutover
+        else None
+    )
     since = utcnow() - timedelta(days=7)
     recent_runs = list(db.scalars(select(MatchRun).where(MatchRun.started_at >= since)).all())
     today = local_now().date()
@@ -101,6 +141,7 @@ def overview(db: Session) -> dict:
         "agency_total": agency_total,
         "unit_price_median": _unit_price_median(properties),
         "worker_alive": worker_alive(),
+        "cutover": cutover_payload,
         "risk_levels": [
             {
                 "key": key,

@@ -25,5 +25,16 @@ class Review(Base):
     reviewer: Mapped[str | None] = mapped_column(String(160), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     seed_key: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True)
+    # 规则切换：成员指纹用于判断能否沿用；旧簇拆散/成员变化时结论作废并重新排队
+    member_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    rule_version: Mapped[str] = mapped_column(String(24), default="v1_threshold", index=True)
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    invalid_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    superseded_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
+    )
+    recheck_of_id: Mapped[int | None] = mapped_column(
+        ForeignKey("reviews.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

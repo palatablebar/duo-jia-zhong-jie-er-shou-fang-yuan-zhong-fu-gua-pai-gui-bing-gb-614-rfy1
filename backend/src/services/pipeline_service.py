@@ -9,13 +9,14 @@ import time
 
 from sqlalchemy import func, select
 
-from src.constants.limits import SIMILARITY_THRESHOLD
+from src.constants.limits import RULE_PROFILE_V1, SIMILARITY_THRESHOLD
 from src.models.agency import Agency
 from src.models.listing import Listing
 from src.models.match_run import MatchRun
 from src.models.property import Property
 from src.models.review import Review
 from src.services import entity_resolution, normalizer, risk_rules
+from src.services.rule_profiles import get_profile
 from src.utils.timeutil import iso_utc, utcnow
 
 LISTING_FIELDS = (
@@ -46,8 +47,9 @@ def _apply_normalized(listing: Listing, norm: dict) -> None:
     listing.parse_flags = norm["parse_flags"]
 
 
-def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD) -> dict:
+def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD, rule_version: str = RULE_PROFILE_V1) -> dict:
     started = time.perf_counter()
+    profile = get_profile(rule_version)
     listings = list(db.scalars(select(Listing).order_by(Listing.id)).all())
     agencies = {agency.id: agency for agency in db.scalars(select(Agency)).all()}
     if not listings:
@@ -63,7 +65,8 @@ def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD) -> 
         _apply_normalized(listing, norm)
 
     agency_ids = [listing.agency_id for listing in listings]
-    result = entity_resolution.resolve(normalized, agency_ids, threshold=threshold)
+    result = entity_resolution.resolve(normalized, agency_ids, threshold=threshold, profile=profile)
+    run.rule_version = profile.version
 
     existing = {prop.cluster_key: prop for prop in db.scalars(select(Property)).all()}
     seen_keys: set[str] = set()
@@ -75,6 +78,7 @@ def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD) -> 
             cluster_key_of(agencies[listings[index].agency_id].code, listings[index].lid) for index in members
         )
         key = hashlib.sha256("|".join(member_lids).encode("utf-8")).hexdigest()[:40]
+        fingerprint = key  # v1 簇键本身即成员指纹
         seen_keys.add(key)
         golden = cluster["golden"]
         member_rows = [
@@ -113,6 +117,10 @@ def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD) -> 
         prop.risk_level = risk["risk_level"]
         prop.risk_tags = risk["risk_tags"]
         prop.risk_detail = risk["risk_detail"]
+        prop.member_lids = member_lids
+        prop.member_fingerprint = fingerprint
+        prop.rule_version = profile.version
+        prop.publish_state = "active"
         prop.run_id = run.id
         prop.updated_at = utcnow()
         db.flush()
@@ -151,7 +159,7 @@ def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD) -> 
     )
     log_lines = [
         f"输入挂牌 {metrics['listings']} 条，面积归一失败 {sum(1 for n in normalized if n['area_num'] is None)} 条",
-        f"blocking 候选对 {metrics['pairs_scored']} 组，阈值 {threshold:.2f} 连边 {metrics['pairs_linked']} 条",
+        f"规则版本 {profile.version}：blocking 候选对 {metrics['pairs_scored']} 组，连边 {metrics['pairs_linked']} 条",
         f"并查集 + 传递闭包得到 {metrics['clusters']} 个簇，其中多成员簇 {metrics['multi_clusters']} 个，去重率 {metrics['dedup_rate']:.2%}",
         f"算法 B：钓鱼价 {baits} 条、僵尸挂牌 {stales} 条，高风险簇 {risk_high} 个、中风险簇 {risk_medium} 个",
         f"淘汰旧簇 {pruned} 个；耗时 {metrics['duration_ms']} ms",
@@ -160,9 +168,12 @@ def run_pipeline(db, run: MatchRun, threshold: float = SIMILARITY_THRESHOLD) -> 
 
 
 def _prune_orphans(db, seen_keys: set[str]) -> int:
-    """删掉本次重算不再产生、且没有复核单的旧簇（有复核单的保留，避免丢历史结论）。"""
+    """删掉本次重算不再产生、且没有复核单的旧 active 簇。
+
+    staging（切换半成品）与 archived（历史归档）簇不在清理范围；有复核单的保留，避免丢历史结论。
+    """
     removed = 0
-    for prop in db.scalars(select(Property)).all():
+    for prop in db.scalars(select(Property).where(Property.publish_state == "active")).all():
         if prop.cluster_key in seen_keys:
             continue
         reviews = db.scalar(select(func.count()).select_from(Review).where(Review.property_id == prop.id)) or 0

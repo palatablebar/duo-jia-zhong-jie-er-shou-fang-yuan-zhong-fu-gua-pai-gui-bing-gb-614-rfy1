@@ -13,5 +13,17 @@ from src.models.listing import Listing  # noqa: E402
 from src.models.property import Property  # noqa: E402
 from src.models.match_run import MatchRun  # noqa: E402
 from src.models.review import Review  # noqa: E402
+from src.models.cutover import CutoverJob, CutoverCheckpoint  # noqa: E402
 
-__all__ = ["Base", "User", "AuditLog", "Agency", "Listing", "Property", "MatchRun", "Review"]
+__all__ = [
+    "Base",
+    "User",
+    "AuditLog",
+    "Agency",
+    "Listing",
+    "Property",
+    "MatchRun",
+    "Review",
+    "CutoverJob",
+    "CutoverCheckpoint",
+]

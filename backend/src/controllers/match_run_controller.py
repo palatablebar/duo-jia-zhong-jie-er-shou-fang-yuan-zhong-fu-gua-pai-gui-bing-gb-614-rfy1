@@ -13,6 +13,7 @@ def create_run(db: Session, payload: dict, principal: dict, request: Request) ->
         trigger=payload.get("trigger") or "manual",
         operator_email=principal["email"],
         threshold=float(payload.get("threshold") or 0.80),
+        rule_version=payload.get("rule_version") or "v1_threshold",
     )
     audit_service.record(
         db,

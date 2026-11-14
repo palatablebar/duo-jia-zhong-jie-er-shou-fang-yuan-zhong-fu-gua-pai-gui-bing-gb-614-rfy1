@@ -1,4 +1,8 @@
-"""导出服务：归并簇 / 挂牌明细 / 复核单 CSV（含两个算法的结果列）。"""
+"""导出服务：归并簇 / 挂牌明细 / 复核单 CSV（含两个算法的结果列）。
+
+导出闸门：规则切换（v1→v2 整批回填）完成前，银行估价清单始终沿用上一版——
+只导出 ``publish_state='active'`` 的已发布簇与未作废复核单；staging 半成品不进入导出。
+"""
 from __future__ import annotations
 
 from sqlalchemy import select
@@ -23,10 +27,21 @@ def _tags(tags: list[str] | None) -> str:
     return " / ".join(RISK_TAG_LABELS.get(tag, tag) for tag in (tags or []))
 
 
+def active_properties(db: Session) -> list[Property]:
+    """已发布簇（银行估价清单口径）；staging/archived 不进入导出。"""
+    return list(
+        db.scalars(
+            select(Property).where(Property.publish_state == "active")
+            .order_by(Property.risk_score.desc(), Property.id)
+        ).all()
+    )
+
+
 def clusters_csv(db: Session) -> bytes:
-    props = db.scalars(select(Property).order_by(Property.risk_score.desc(), Property.id)).all()
+    props = active_properties(db)
     headers = [
         "簇编号",
+        "规则版本",
         "小区",
         "户型",
         "面积众数(㎡)",
@@ -49,6 +64,7 @@ def clusters_csv(db: Session) -> bytes:
         rows.append(
             [
                 prop.id,
+                prop.rule_version,
                 prop.community,
                 prop.layout,
                 f"{prop.area_mode:g}",
@@ -75,7 +91,7 @@ def listings_csv(db: Session, agency_id: int | None = None) -> bytes:
         stmt = stmt.where(Listing.agency_id == agency_id)
     listings = db.scalars(stmt.order_by(Listing.id)).all()
     agencies = {agency.id: agency for agency in db.scalars(select(Agency)).all()}
-    props = {prop.id: prop for prop in db.scalars(select(Property)).all()}
+    props = {prop.id: prop for prop in active_properties(db)}
     headers = [
         "挂牌编号",
         "中介",
@@ -93,6 +109,7 @@ def listings_csv(db: Session, agency_id: int | None = None) -> bytes:
         "挂牌天数",
         "带看次数",
         "所属簇",
+        "规则版本",
         "簇风险分",
         "风险标签",
         "归一标记",
@@ -118,6 +135,7 @@ def listings_csv(db: Session, agency_id: int | None = None) -> bytes:
                 listing.listed_days,
                 listing.views,
                 prop.id if prop else "",
+                prop.rule_version if prop else "",
                 prop.risk_score if prop else "",
                 _tags(listing.risk_tags),
                 " / ".join(listing.parse_flags or []),
@@ -127,18 +145,31 @@ def listings_csv(db: Session, agency_id: int | None = None) -> bytes:
 
 
 def reviews_csv(db: Session, status: str | None = None) -> bytes:
-    stmt = select(Review)
+    stmt = select(Review).where(Review.invalidated_at.is_(None))
     if status:
         stmt = stmt.where(Review.status == status)
     reviews = db.scalars(stmt.order_by(Review.id)).all()
-    props = {prop.id: prop for prop in db.scalars(select(Property)).all()}
-    headers = ["复核号", "小区", "户型", "风险分", "风险等级", "复核原因", "状态", "复核人", "结论备注", "创建时间"]
+    props = {prop.id: prop for prop in active_properties(db)}
+    headers = [
+        "复核号",
+        "规则版本",
+        "小区",
+        "户型",
+        "风险分",
+        "风险等级",
+        "复核原因",
+        "状态",
+        "复核人",
+        "结论备注",
+        "创建时间",
+    ]
     rows = []
     for review in reviews:
         prop = props.get(review.property_id)
         rows.append(
             [
                 review.id,
+                review.rule_version,
                 prop.community if prop else "",
                 prop.layout if prop else "",
                 review.risk_score,

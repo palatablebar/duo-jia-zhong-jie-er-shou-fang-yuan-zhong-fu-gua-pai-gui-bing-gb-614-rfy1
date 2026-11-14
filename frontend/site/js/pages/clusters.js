@@ -4,6 +4,56 @@ import { badge, drawer, emptyState, errorBox, errorMessage, esc, field, fmtTime,
 
 const state = { q: '', riskLevel: '', tag: '', multi: '', sort: 'risk', threshold: '0.80' };
 
+function cutoverTone(status) {
+  return { completed: 'ok', running: 'warn', failed: 'danger', rolled_back: 'danger', pending: '' }[status] || '';
+}
+
+function cutoverPanel(ctx, cutover) {
+  const canRun = can(ctx.user.role, 'run:create');
+  if (!cutover) {
+    return `<section class="panel">
+      <div class="panel-head"><h2>归并规则切换</h2><span class="meta">当前：${esc(ENUMS.ruleProfile.v1_threshold)}</span></div>
+      <div class="panel-body">
+        <p class="note">归并规则可从单一相似度阈值升级为多规则复合门控。升级会对最近一个月房源整批回填，
+        切换完成前银行估价清单仍使用上一版（v1），半成品不会进入导出。</p>
+        ${canRun ? '<button class="btn sm accent" id="cutover-run">启动整批回填（v1 → v2）</button>' : ''}
+      </div>
+    </section>`;
+  }
+  const pctDone = cutover.total_batches ? Math.round((cutover.done_batches / cutover.total_batches) * 100) : 0;
+  const recon = cutover.reconciliation || {};
+  return `<section class="panel">
+    <div class="panel-head">
+      <h2>归并规则切换</h2>
+      ${badge(cutoverTone(cutover.status), ENUMS.cutoverStatus[cutover.status] || cutover.status)}
+    </div>
+    <div class="panel-body" style="display:grid;gap:10px">
+      <div class="kv">
+        ${kv([
+          ['规则版本', `${esc(ENUMS.ruleProfile[cutover.from_version] || cutover.from_version)} → ${esc(ENUMS.ruleProfile[cutover.to_version] || cutover.to_version)}`],
+          ['回填窗口', `最近 ${esc(cutover.backfill_days)} 天 · ${esc(cutover.total_listings)} 条挂牌`],
+          ['断点进度', `${esc(cutover.done_batches)} / ${esc(cutover.total_batches)} 批（${pctDone}%）`],
+          ['复核处理', `沿用 ${esc(cutover.review_carried)} · 作废 ${esc(cutover.review_invalidated)} · 重排队 ${esc(cutover.review_requeued)}`],
+          ['对账读数', `簇 ${esc(cutover.cluster_count)} · 成员 ${esc(cutover.member_count)} · 导出行 ${esc(cutover.export_rows)}${recon.consistent === false ? ' · <b style="color:var(--danger,#c0392b)">对账不一致</b>' : ''}`],
+          ['最近错误', cutover.last_error ? esc(cutover.last_error) : '—'],
+        ])}
+      </div>
+      <div class="risk-meter"><div class="track"><div class="fill ${cutoverTone(cutover.status)}" style="width:${Math.max(2, pctDone)}%"></div></div><span class="val">${pctDone}%</span></div>
+      ${cutover.status === 'completed'
+        ? '<p class="note">切换已完成：银行估价清单已切换到 v2，旧 v1 簇已归档保留追溯。</p>'
+        : `<p class="note">切换未完成：导出仍只包含已发布的 ${esc(ENUMS.ruleProfile[cutover.from_version] || cutover.from_version)} 数据，staging 半成品被隔离。</p>
+           ${canRun ? `<button class="btn sm accent" id="cutover-run">${cutover.status === 'failed' ? '从断点重试整批回填' : '继续整批回填'}</button>` : ''}`}
+      ${(cutover.checkpoints || []).length ? `<details><summary class="muted" style="cursor:pointer">查看 ${cutover.checkpoints.length} 个批次断点</summary>
+        <div class="run-history" style="margin-top:8px">${cutover.checkpoints.map((cp) => `<div class="row">
+          <span class="mono">批次 #${esc(cp.batch_no)}</span>
+          <span class="badge ${cp.status === 'done' ? 'ok' : cp.status === 'failed' ? 'danger' : 'warn'}">${esc(cp.status)}</span>
+          <span class="muted">阶段 ${esc(cp.phase)} · 尝试 ${esc(cp.attempts)} 次 · ${esc(cp.listing_count)} 挂牌 / ${esc(cp.cluster_count)} 簇</span>
+          ${cp.error ? `<span class="muted" style="color:var(--danger,#c0392b)">${esc(cp.error)}</span>` : ''}
+        </div>`).join('')}</div></details>` : ''}
+    </div>
+  </section>`;
+}
+
 function riskBadge(prop) {
   if (!prop.risk_level || prop.risk_level === 'none') return '<span class="badge ok">正常</span>';
   return `<span class="badge ${riskTone(prop.risk_level)}">${esc(prop.risk_level_label)} ${esc(prop.risk_score)}</span>`;
@@ -96,8 +146,9 @@ export const clustersPage = {
   async render(view, ctx) {
     let data;
     let runs;
+    let cutover;
     try {
-      [data, runs] = await Promise.all([
+      [data, runs, cutover] = await Promise.all([
         api.get('/api/properties', {
           q: state.q,
           risk_level: state.riskLevel,
@@ -107,6 +158,7 @@ export const clustersPage = {
           limit: 50,
         }),
         api.get('/api/runs', { limit: 4 }),
+        api.get('/api/cutover'),
       ]);
     } catch (err) {
       view.innerHTML = errorBox(errorMessage(err));
@@ -114,7 +166,9 @@ export const clustersPage = {
       return;
     }
     const latest = runs.items[0];
+    const cutoverJob = cutover?.job || cutover;
     view.innerHTML = `
+      ${cutoverPanel(ctx, cutoverJob)}
       ${runPanel(ctx, latest)}
       <section class="panel">
         <div class="panel-head">
@@ -192,6 +246,26 @@ export const clustersPage = {
         toast(errorMessage(err), 'err');
         runButton.disabled = false;
         runButton.textContent = '全量重算归并';
+      }
+    });
+    const cutoverButton = view.querySelector('#cutover-run');
+    cutoverButton?.addEventListener('click', async () => {
+      cutoverButton.disabled = true;
+      cutoverButton.textContent = '整批回填中…';
+      try {
+        const job = await api.post('/api/cutover/run', { job_key: 'rule-v1-to-v2', backfill_days: 30 });
+        if (job.status === 'completed') {
+          toast(`切换完成：${job.cluster_count} 簇 / 成员 ${job.member_count} / 导出行 ${job.export_rows} 对账一致`);
+        } else if (job.status === 'failed') {
+          toast(`批次失败，旧版仍生效：${job.last_error || '见断点详情'}`, 'err');
+        } else {
+          toast(`回填进度 ${job.done_batches}/${job.total_batches} 批`);
+        }
+        await clustersPage.render(view, ctx);
+      } catch (err) {
+        toast(errorMessage(err), 'err');
+        cutoverButton.disabled = false;
+        cutoverButton.textContent = '重试整批回填';
       }
     });
     view.querySelectorAll('table.data tbody tr').forEach((row) => {

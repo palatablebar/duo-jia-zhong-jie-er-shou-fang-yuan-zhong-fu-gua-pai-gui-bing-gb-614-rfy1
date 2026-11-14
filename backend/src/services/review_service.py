@@ -30,6 +30,12 @@ def serialize(review: Review, prop: Property | None = None) -> dict:
         "status_label": REVIEW_STATUS_LABELS.get(review.status, review.status),
         "reviewer": review.reviewer,
         "note": review.note,
+        "rule_version": review.rule_version,
+        "member_fingerprint": review.member_fingerprint,
+        "invalidated_at": iso_utc(review.invalidated_at) if review.invalidated_at else None,
+        "invalid_reason": review.invalid_reason,
+        "recheck_of_id": review.recheck_of_id,
+        "superseded_by_id": review.superseded_by_id,
         "created_at": iso_utc(review.created_at),
         "updated_at": iso_utc(review.updated_at),
         "property": {
@@ -60,8 +66,8 @@ def list_reviews(
     limit: int = 20,
     offset: int = 0,
 ) -> dict:
-    stmt = select(Review).join(Property, Property.id == Review.property_id)
-    count_stmt = select(func.count()).select_from(Review)
+    stmt = select(Review).join(Property, Property.id == Review.property_id).where(Review.invalidated_at.is_(None))
+    count_stmt = select(func.count()).select_from(Review).where(Review.invalidated_at.is_(None))
     if status:
         stmt = stmt.where(Review.status == status)
         count_stmt = count_stmt.where(Review.status == status)
@@ -125,6 +131,8 @@ def ensure_for_property(
         risk_score=prop.risk_score,
         status="pending",
         seed_key=seed_key,
+        member_fingerprint=prop.member_fingerprint,
+        rule_version=getattr(prop, "rule_version", "v1_threshold") or "v1_threshold",
     )
     db.add(review)
     db.flush()

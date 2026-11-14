@@ -51,6 +51,10 @@ export const ENUMS = {
   reviewStatus: { pending: '待复核', confirmed: '已确认', dismissed: '已驳回' },
   reviewReason: { bait: '疑似钓鱼价', stale: '疑似僵尸挂牌', spread: '簇内价差异常', manual: '人工抽查' },
   trigger: { manual: '手动', schedule: '定时', seed: '初始化' },
+  ruleProfile: { v1_threshold: 'v1 单一相似度阈值', v2_composite: 'v2 多规则复合门控' },
+  cutoverStatus: {
+    pending: '未开始', running: '回填中', failed: '失败（旧版生效）', completed: '切换完成', rolled_back: '已回滚',
+  },
 };
 
 export function can(role, permission) {

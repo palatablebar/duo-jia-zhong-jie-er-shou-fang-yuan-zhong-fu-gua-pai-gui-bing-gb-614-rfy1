@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.constants.enums import TRIGGER_LABELS, RunStatus
-from src.constants.limits import SIMILARITY_THRESHOLD
+from src.constants.limits import RULE_PROFILE_V1, SIMILARITY_THRESHOLD
 from src.models.agency import Agency
 from src.models.match_run import MatchRun
 from src.services import pipeline_service
@@ -27,6 +27,7 @@ def serialize(run: MatchRun) -> dict:
         "dedup_rate": run.dedup_rate,
         "risk_count": run.risk_count,
         "threshold": run.threshold,
+        "rule_version": run.rule_version,
         "metrics": run.metrics or {},
         "log_text": run.log_text,
         "started_at": iso_utc(run.started_at),
@@ -40,11 +41,12 @@ def next_run_no(db: Session) -> str:
     return f"{prefix}-{count + 1:04d}"
 
 
-def execute(db: Session, run: MatchRun, threshold: float) -> MatchRun:
+def execute(db: Session, run: MatchRun, threshold: float, rule_version: str = RULE_PROFILE_V1) -> MatchRun:
     run.status = RunStatus.RUNNING.value
     run.threshold = threshold
+    run.rule_version = rule_version
     try:
-        result = pipeline_service.run_pipeline(db, run, threshold=threshold)
+        result = pipeline_service.run_pipeline(db, run, threshold=threshold, rule_version=rule_version)
         metrics = result.get("metrics") or {}
         run.metrics = metrics
         run.log_text = result.get("log") or ""
@@ -71,6 +73,7 @@ def create_and_execute(
     trigger: str,
     operator_email: str,
     threshold: float = SIMILARITY_THRESHOLD,
+    rule_version: str = RULE_PROFILE_V1,
     seed_key: str | None = None,
 ) -> MatchRun:
     if seed_key:
@@ -85,11 +88,12 @@ def create_and_execute(
         status=RunStatus.RUNNING.value,
         operator_email=operator_email,
         threshold=threshold,
+        rule_version=rule_version,
         seed_key=seed_key,
     )
     db.add(run)
     db.flush()
-    return execute(db, run, threshold)
+    return execute(db, run, threshold, rule_version)
 
 
 def list_runs(db: Session, status: str | None, limit: int, offset: int) -> dict:

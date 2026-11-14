@@ -24,6 +24,7 @@ class MatchRun(Base):
     dedup_rate: Mapped[float] = mapped_column(Float, default=0.0)
     risk_count: Mapped[int] = mapped_column(Integer, default=0)
     threshold: Mapped[float] = mapped_column(Float, default=0.8)
+    rule_version: Mapped[str] = mapped_column(String(24), default="v1_threshold", index=True)
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
     log_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     seed_key: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True)

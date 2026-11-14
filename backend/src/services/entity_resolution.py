@@ -17,6 +17,7 @@ from src.constants.limits import (
     AREA_TOLERANCE_M2,
     FLOOR_BAND_MATCH,
     PRICE_CLOSE_SPAN,
+    RULE_PROFILE_V1,
     SIMILARITY_THRESHOLD,
     WEIGHT_AREA,
     WEIGHT_FLOOR,
@@ -24,6 +25,7 @@ from src.constants.limits import (
     WEIGHT_PRICE,
     WEIGHT_TITLE,
 )
+from src.services.rule_profiles import RuleProfile, get_profile, should_link
 
 
 def _clamp(value: float) -> float:
@@ -215,18 +217,34 @@ def resolve(
     normalized: Sequence[dict],
     agency_ids: Sequence[int],
     threshold: float = SIMILARITY_THRESHOLD,
+    profile: RuleProfile | str | None = None,
 ) -> dict:
-    """跑完整算法 A：返回簇、边、指标。"""
+    """跑完整算法 A：返回簇、边、指标。
+
+    ``profile`` 给出连边规则版本（v1 单阈值 / v2 复合门控）；
+    为兼容旧调用，仅传 ``threshold`` 时按 v1 规则、使用该阈值连边，结果与升级前一致。
+    """
+    if profile is None:
+        rule = RuleProfile(version=RULE_PROFILE_V1, score_threshold=threshold)
+    elif isinstance(profile, str):
+        rule = get_profile(profile)
+    else:
+        rule = profile
     pairs = candidate_pairs(normalized)
     union_find = UnionFind(len(normalized))
     edges: list[dict] = []
     linked = 0
+    gate_rejections: dict[str, int] = {}
     for left, right in pairs:
         detail = similarity(normalized[left], normalized[right])
-        if detail["score"] >= threshold:
+        cross_agency = agency_ids[left] != agency_ids[right]
+        accepted, gates = should_link(detail, normalized[left], normalized[right], rule, cross_agency)
+        if accepted:
             linked += 1
             union_find.union(left, right)
-            edges.append({"left": left, "right": right, **detail})
+            edges.append({"left": left, "right": right, **detail, "gates": gates})
+        elif rule.is_composite and gates.get("rejected_by"):
+            gate_rejections[gates["rejected_by"]] = gate_rejections.get(gates["rejected_by"], 0) + 1
 
     groups: dict[int, list[int]] = {}
     for index in range(len(normalized)):
@@ -252,7 +270,9 @@ def resolve(
         "multi_clusters": len(multi),
         "pairs_scored": len(pairs),
         "pairs_linked": linked,
-        "threshold": threshold,
+        "threshold": rule.score_threshold,
+        "rule_version": rule.version,
+        "gate_rejections": gate_rejections,
         "dedup_rate": round(1 - len(clusters) / len(normalized), 4) if normalized else 0.0,
     }
     return {"clusters": clusters, "edges": edges, "metrics": metrics}

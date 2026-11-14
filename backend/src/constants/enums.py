@@ -158,3 +158,64 @@ REVIEW_REASON_LABELS: dict[str, str] = {
     ReviewReason.SPREAD.value: "簇内价差异常",
     ReviewReason.MANUAL.value: "人工抽查",
 }
+
+
+class RuleProfile(StrEnum):
+    """归并规则版本：v1 单一相似度阈值 / v2 多规则复合门控。"""
+
+    V1 = "v1_threshold"
+    V2 = "v2_composite"
+
+
+RULE_PROFILE_LABELS: dict[str, str] = {
+    RuleProfile.V1.value: "v1 单一相似度阈值",
+    RuleProfile.V2.value: "v2 多规则复合门控",
+}
+
+
+class CutoverStatus(StrEnum):
+    """规则切换（整批回填）状态机。"""
+
+    PENDING = "pending"        # 尚未开始
+    RUNNING = "running"        # 回填进行中（可断点续跑）
+    FAILED = "failed"          # 中途失败，旧版仍生效
+    COMPLETED = "completed"    # 对账通过，切换完成
+    ROLLED_BACK = "rolled_back"
+
+
+CUTOVER_STATUS_LABELS: dict[str, str] = {
+    CutoverStatus.PENDING.value: "未开始",
+    CutoverStatus.RUNNING.value: "回填中",
+    CutoverStatus.FAILED.value: "失败（旧版生效）",
+    CutoverStatus.COMPLETED.value: "切换完成",
+    CutoverStatus.ROLLED_BACK.value: "已回滚",
+}
+
+
+class CutoverPhase(StrEnum):
+    """单个回填批次的处理阶段（检查点）。"""
+
+    NORMALIZE = "normalize"
+    RESOLVE = "resolve"
+    PERSIST = "persist"
+    REVIEW = "review"
+    DONE = "done"
+
+
+class CheckpointStatus(StrEnum):
+    PENDING = "pending"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class ReviewInvalidReason(StrEnum):
+    """旧复核结论作废原因。"""
+
+    CLUSTER_SPLIT = "cluster_split"      # 原簇被拆散
+    MEMBERS_CHANGED = "members_changed"  # 成员集合发生变化
+
+
+REVIEW_INVALID_REASON_LABELS: dict[str, str] = {
+    ReviewInvalidReason.CLUSTER_SPLIT.value: "原簇被拆散，结论作废",
+    ReviewInvalidReason.MEMBERS_CHANGED.value: "簇成员变更，结论作废",
+}

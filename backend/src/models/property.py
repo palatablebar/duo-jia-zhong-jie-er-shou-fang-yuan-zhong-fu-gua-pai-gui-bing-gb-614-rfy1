@@ -34,6 +34,14 @@ class Property(Base):
     risk_level: Mapped[str] = mapped_column(String(10), default="none", index=True)
     risk_tags: Mapped[list] = mapped_column(JSON, default=list)
     risk_detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    member_lids: Mapped[list] = mapped_column(JSON, default=list)
+    # 规则版本与发布状态：active = 已发布（银行估价清单口径），staging = 切换回填中的半成品
+    rule_version: Mapped[str] = mapped_column(String(24), default="v1_threshold", index=True)
+    publish_state: Mapped[str] = mapped_column(String(12), default="active", index=True)
+    member_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    cutover_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cutover_jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     run_id: Mapped[int | None] = mapped_column(
         ForeignKey("match_runs.id", ondelete="SET NULL"), nullable=True, index=True
     )
